@@ -146,9 +146,17 @@ Rollback is not limited to one mechanism:
 
 Each level addresses a different failure type and preserves a clear audit trail.
 
-## Cost and scope decisions
+## Delivery governance and cost decisions
 
-### 22. Cost-aware demonstration settings
+### 22. Protected `main` branches
+
+Direct pushes to `main` are blocked. Changes must be submitted through pull requests and pass the required CI checks before they can be merged.
+
+This creates a controlled path from change to deployment. It ensures that application, workflow, and infrastructure changes are reviewed, tested, and visible in version history before they can trigger development or production delivery. Force pushes and unauthorized branch deletion should also remain disabled.
+
+This is especially important for the infrastructure and reusable workflow repositories, where an unreviewed change can affect multiple environments or many microservice pipelines.
+
+### 23. Cost-aware demonstration settings
 
 The project uses small task sizes, low desired counts, short log retention, and configurable RDS settings. These choices keep the demonstration affordable and reproducible. They should not be interpreted as production availability or capacity recommendations.
 
