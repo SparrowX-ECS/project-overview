@@ -11,18 +11,28 @@
 
 This separates build identity from environment deployment and gives production a verifiable artifact lineage.
 
-## Three rollback levels
+## Deployment switches and guard
+
+Each application environment file contains an `appStack.state` switch. The infrastructure environment file contains the corresponding `RootStack.State` switch. The reusable `deployment-guard` workflow reads both values and allows downstream deployment jobs to run only when both are `enabled`.
+
+This provides two independent pause controls: an application can be disabled without stopping the whole environment, and the platform team can disable an environment or root stack without editing every application workflow.
+
+## Four rollback methods
 
 ### 1. ECS deployment rollback
 
 The reusable CloudFormation service template enables the ECS deployment circuit breaker with rollback. If a rolling deployment fails its health checks or cannot stabilize, ECS can return the service to the previous task definition automatically.
 
-### 2. Git revert rollback
+### 2. Production-pipeline rollback
+
+If the production deployment completes but the post-deployment smoke test or API/frontend test fails, the production quality gate fails. The workflow resolves the previous deployed image from SSM and redeploys it automatically.
+
+### 3. Git revert rollback
 
 When the desired state or application configuration is wrong, reverting the offending commit causes the normal CI/CD path to produce and deploy a corrective commit. This preserves an auditable source-history explanation for the change.
 
-### 3. Manual quicker image rollback
+### 4. Manual quicker image rollback
 
 Each service has a manually triggered production rollback workflow. An operator types `ROLLBACK`, selects a previously known-good image tag, redeploys it through the shared deployment workflow, runs the production smoke test, and publishes the resulting deployed metadata. No rebuild is required.
 
-These paths cover automatic failure recovery, source-controlled correction, and urgent operator-led recovery.
+These four paths cover infrastructure-level failure recovery, post-deployment validation failure, source-controlled correction, and urgent operator-led recovery.

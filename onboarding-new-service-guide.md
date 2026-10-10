@@ -12,8 +12,11 @@ A service repository should provide:
 - `GET /health` for the ALB target group;
 - a service-specific API smoke-test path;
 - `ecs-parameters-dev.yaml` and `ecs-parameters-prod.yaml`;
+- an `appStack.state` deployment switch in both environment parameter files;
 - thin GitHub Actions workflows calling the reusable templates;
 - repository/environment variables for AWS access, URLs, and release metadata.
+
+For Python services, expose a Prometheus-compatible `/metrics` endpoint so the shared observability stack can discover and scrape the service.
 
 ## Step 1: Create the service repository
 
@@ -36,6 +39,9 @@ Start from the same schema as an existing service and change the service-specifi
 project:
   name: sparrowx
   environment: dev
+
+appStack:
+  state: enabled
 
 service:
   name: new-service
@@ -63,6 +69,8 @@ database:
 
 For `prod`, change `project.environment` and `image.nameSpace` to `prod`. Choose a unique ALB listener priority. If the service has upstream dependencies, add the corresponding `upstream` values. If it needs persistence, enable `database` and declare the database name.
 
+Set `appStack.state: disabled` when the application should not participate in deployments for that environment. The application switch works together with the infrastructure repository’s `RootStack.State`; the deployment guard allows downstream jobs to run only when both switches are `enabled`.
+
 ## Step 3: Add repository workflows
 
 Copy the workflow shape from an existing service and update:
@@ -73,6 +81,8 @@ Copy the workflow shape from an existing service and update:
 - whether the build is a frontend build;
 - the environment parameter file passed to each reusable workflow;
 - the service’s paths in the `paths` filters.
+
+Include the reusable `deployment-guard` job before deployment-dependent jobs. It reads the application parameter file and the selected infrastructure environment, then exposes the deployment decision to downstream jobs.
 
 The service should have workflows for:
 
@@ -125,11 +135,12 @@ Review:
 
 After the application change reaches `main`:
 
-1. CI resolves the immutable image metadata.
-2. The service deploys to the `dev` ECS stack.
-3. CloudFormation and ECS wait for stability.
-4. The smoke-test workflow calls the configured development URL and path.
-5. Successful metadata is published as the production candidate.
+1. The deployment guard confirms that both application and infrastructure switches are enabled.
+2. CI resolves the immutable image metadata.
+3. The service deploys to the `dev` ECS stack.
+4. CloudFormation and ECS wait for stability.
+5. The smoke-test workflow calls the configured development URL and path.
+6. Successful metadata is published as the production candidate.
 
 Verify the ALB target is healthy, inspect CloudWatch logs, open the API documentation, exercise the service, and confirm upstream/database traffic.
 
@@ -147,12 +158,16 @@ Run the service’s production promotion workflow:
 
 ## Step 9: Roll back when necessary
 
-There are two repository-level rollback methods:
+There are four rollback methods:
 
+- **ECS automatic rollback:** an unhealthy rolling deployment can be returned to the previous task definition by the ECS deployment circuit breaker.
+- **Production-pipeline rollback:** if production smoke or API/frontend tests fail, the production workflow resolves and redeploys the previous deployed image.
 - **Git revert:** revert the bad application or configuration commit, merge the revert, and let the normal pipeline deploy the correction.
 - **Quick image rollback:** open **Deployments → prod**, select the desired previous deployment, copy its image tag, then run **Actions → Manual Rollback Production To Selected Image Tag** with `ROLLBACK` and that tag.
 
-The rollback workflow redeploys the selected image, runs the production smoke test, and publishes deployment metadata. ECS also provides automatic circuit-breaker rollback for unhealthy rolling deployments.
+The manual rollback workflow redeploys the selected image, runs the production smoke test, and publishes deployment metadata.
+
+If the service exposes Prometheus metrics, confirm that its `/metrics` endpoint is reachable from the private observability service and that the service appears in Prometheus service discovery.
 
 ## Current manual bottleneck
 
@@ -173,3 +188,5 @@ This is a known temporary limitation. The intended improvement is a validated se
 - [ ] Development deployment and smoke test verified.
 - [ ] Production promotion and smoke test verified.
 - [ ] Rollback procedure tested or documented.
+- [ ] `appStack.state` verified for both `dev` and `prod`.
+- [ ] `/metrics` exposed and verified for Prometheus scraping, where applicable.

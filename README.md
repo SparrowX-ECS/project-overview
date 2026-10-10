@@ -14,6 +14,8 @@ SparrowX is a small B2B SaaS company with a six-person development team. Each de
 
 The product supports customer management, internal task tracking, notifications, billing, reporting, and a browser-based portal. The product domain is intentionally simple; its purpose is to exercise the platform’s traffic and deployment paths.
 
+The platform also includes an optional Prometheus and Grafana observability stack, deployed as ECS services alongside the application workloads.
+
 | Workload | Team responsibility | Runtime role | Persistence / communication |
 | --- | --- | --- | --- |
 | `customer-api` | Customer experience | Customer CRUD and search API | Private PostgreSQL RDS |
@@ -36,6 +38,7 @@ The starting point is a small company with independently owned services and a ne
 - application repositories should contain service code, tests, a Dockerfile, and a small ECS configuration file;
 - shared infrastructure should provide the AWS foundation and reusable service deployment primitive;
 - shared workflows should standardize testing, image building, security scanning, deployment, promotion, and smoke testing;
+- deployments should be independently switchable at both the application and infrastructure levels;
 - development and production should be isolated and tracked independently;
 - production should receive the exact artifact tested in development;
 - deployment failure and urgent recovery should have clear rollback paths;
@@ -54,6 +57,8 @@ The project deliberately focuses on this platform boundary. The microservices ar
 7. Demonstrate frontend-to-backend, backend-to-backend, and backend-to-database traffic.
 8. Make deployment health visible and rollback practical.
 9. Document the trade-offs and remaining gaps honestly.
+10. Provide an optional, environment-aware Prometheus and Grafana observability stack.
+11. Allow deployment enablement to be controlled safely through reusable deployment guards.
 
 ## Scope
 
@@ -75,7 +80,9 @@ The project deliberately focuses on this platform boundary. The microservices ar
 - GitHub OIDC access to AWS.
 - Trivy container image scanning.
 - Environment smoke tests after deployment.
-- Three rollback levels: ECS automatic rollback, Git revert, and manual image rollback.
+- Reusable deployment guards using application and infrastructure deployment switches.
+- Optional Prometheus and Grafana observability services deployed on ECS.
+- Four rollback methods: ECS automatic rollback, production-pipeline rollback, Git revert, and manual image rollback.
 
 ### Deliberately excluded
 
@@ -106,6 +113,8 @@ The [`ecs-infrastructure`](https://github.com/SparrowX-ECS/ecs-infrastructure) r
 
 The reusable `cloudformation/service.yaml` template is the application onboarding primitive. It creates an ECS task definition, Fargate service, target group, listener rule, service security group, IAM roles, Service Connect configuration, health checks, and CloudWatch log group from service parameters.
 
+The environment root stacks also contain an optional observability nested stack. When enabled, it deploys Prometheus and Grafana as private ECS services, configures Prometheus to discover and scrape ECS workloads, provisions Grafana with Prometheus as a data source, and can expose `/prometheus` and `/grafana` through the ALB for controlled testing.
+
 ### Reusable workflow templates
 
 The [`workflows-templates`](https://github.com/SparrowX-ECS/workflows-templates) repository centralizes the CI/CD building blocks used by all application repositories:
@@ -126,6 +135,8 @@ Each application repository keeps only thin workflow composition and service-spe
 ## Multi-environment delivery
 
 Every workload has separate `ecs-parameters-dev.yaml` and `ecs-parameters-prod.yaml` files. The environments have separate ECS stacks, ECR namespaces, URLs, deployment metadata, and GitHub deployment histories.
+
+Deployment is controlled by two switches. Each application repository sets `appStack.state` in its environment parameter file, while `ecs-infrastructure` sets `RootStack.State` in the corresponding environment parameters. The reusable `deployment-guard` workflow reads both values and exposes `deployment-enabled=true` only when both are `enabled`; downstream jobs use that result to decide whether to run. This allows application-level and platform-level deployment freezes without changing the workflow structure.
 
 The delivery flow is:
 
@@ -158,11 +169,12 @@ This is **Build Once, Promote Many**. The production image is not rebuilt. The t
 
 ## Rollback options
 
-The project has three rollback levels:
+The project has four rollback methods:
 
 1. **ECS deployment rollback:** the reusable ECS service template enables the deployment circuit breaker with rollback. An unhealthy rolling deployment can return to the previous task definition.
-2. **Git revert rollback:** revert the problematic application or deployment commit and let the normal CI/CD pipeline validate and deploy the corrective state.
-3. **Manual quicker image rollback:** open the repository’s GitHub **Deployments** tab, select the `prod` environment, open the desired previous deployment, copy its image tag, then run `rollback-prod.yaml` with confirmation `ROLLBACK` and that tag. The workflow redeploys the immutable image and runs a production smoke test without rebuilding.
+2. **Production-pipeline rollback:** if post-deployment production tests fail, the production workflow resolves the previous deployed image and redeploys it automatically.
+3. **Git revert rollback:** revert the problematic application or deployment commit and let the normal CI/CD pipeline validate and deploy the corrective state.
+4. **Manual quicker image rollback:** open the repository’s GitHub **Deployments** tab, select the `prod` environment, open the desired previous deployment, copy its image tag, then run `rollback-prod.yaml` with confirmation `ROLLBACK` and that tag. The workflow redeploys the immutable image and runs a production smoke test without rebuilding.
 
 ## Security and reliability measures
 
@@ -175,10 +187,12 @@ The project has three rollback levels:
 - Trivy scans images before deployment metadata is published.
 - ALB and ECS health checks run during deployments.
 - CloudWatch logs are created per environment and service.
+- Prometheus scrapes application `/metrics` endpoints and Grafana provides dashboards over the Prometheus data source.
+- Deployment switches and a reusable deployment guard prevent jobs from acting when either the application or environment is disabled.
 - ECS deployment circuit breakers provide automatic failure rollback.
 - RDS storage is encrypted through the infrastructure templates.
 
-Application security can be strengthened further by adding SAST to pull-request pipelines and DAST after deployment smoke tests. Those are intentionally identified as next improvements rather than claimed as already implemented.
+SAST and DAST are integrated into the pull-request and development deployment quality gates through the reusable workflows.
 
 ## Hosted demonstration
 
@@ -196,6 +210,7 @@ The AWS environment may be taken down after a demonstration to avoid ongoing res
 - [Scope and goals](scope-and-goals.md)
 - [Architecture and onboarding model](architecture-and-onboarding.md)
 - [Delivery and rollback model](delivery-and-rollback.md)
+- [DevSecOps controls](devsecops-controls.md)
 
 The original [`the-platform-challenge-ecs`](../the-platform-challenge-ecs) directory is retained as historical context. This directory is the current project overview.
 

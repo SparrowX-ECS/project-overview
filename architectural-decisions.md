@@ -98,7 +98,7 @@ This keeps account-specific deployment context out of workflow source files and 
 
 ECS tasks and RDS databases run in private subnets. Database credentials are generated and stored in Secrets Manager, security groups limit traffic to required paths, and ECS execution and application task roles are separate.
 
-These controls are combined with immutable image tags, Trivy scanning, health checks, CloudWatch logs, and ECS deployment circuit breakers. SAST and DAST remain planned additions: SAST can scan source and dependencies during pull requests, while DAST can test deployed services after development deployment and smoke tests.
+These controls are combined with immutable image tags, Trivy scanning, health checks, CloudWatch logs, SAST/DAST quality gates, and ECS deployment circuit breakers.
 
 ## Delivery and reliability decisions
 
@@ -124,6 +124,8 @@ The templates can also evolve without forcing every service to upgrade immediate
 
 This model also makes workflow capabilities replaceable. For example, the centralized image security step could move from Trivy to Grype, Snyk Container, or another approved scanner without redesigning every application pipeline individually. The trade-off is that workflow inputs, version tags, repository variables, environment protection, and release compatibility must be managed carefully.
 
+The reusable workflows also provide a standardized DevSecOps pipeline across every application repository: pull-request tests and source scanning; post-merge authoritative image builds, Trivy scanning, signing, and metadata publication; automated development deployment with smoke tests, API tests, and DAST; and manually approved production promotion with post-deployment validation. Quality gates are applied at each stage, so security and delivery controls are consistent while runtime-specific inputs remain configurable.
+
 ### 19. Immutable image promotion by digest
 
 Production promotion does not rebuild an application image and does not trust a mutable tag by itself. The development pipeline records the image tag and digest in SSM Parameter Store after the image is built, scanned, and successfully deployed. The promotion workflow resolves both values, verifies the source image, uses Skopeo to copy the exact image content from the development ECR namespace to the production ECR namespace, verifies that the target digest matches, and deploys the selected tag.
@@ -136,15 +138,16 @@ Development deployment is automated after a merge to `main`. Production requires
 
 This keeps production deployment visible and gives the project a realistic approval boundary without introducing a complex release-management system.
 
-### 21. Three rollback levels
+### 21. Four rollback methods
 
 Rollback is not limited to one mechanism:
 
 - ECS circuit-breaker rollback handles an unhealthy rolling deployment.
+- The production pipeline automatically redeploys the previous image when post-deployment production tests fail.
 - Git revert restores source-controlled desired state.
 - Manual selected-image rollback provides the quickest operator recovery without rebuilding.
 
-Each level addresses a different failure type and preserves a clear audit trail.
+Each method addresses a different failure type and preserves a clear audit trail.
 
 ## Delivery governance and cost decisions
 
@@ -161,3 +164,17 @@ This is especially important for the infrastructure and reusable workflow reposi
 The project uses small task sizes, low desired counts, short log retention, and configurable RDS settings. These choices keep the demonstration affordable and reproducible. They should not be interpreted as production availability or capacity recommendations.
 
 The three-NAT-Gateway network layout demonstrates a production-oriented availability and cost decision, while other settings can be reduced through feature flags when the goal is a low-cost development environment.
+
+### 24. Dual deployment switches with a reusable guard
+
+Deployment enablement is controlled at two layers. Each application repository sets `appStack.state` in its `ecs-parameters-dev.yaml` and `ecs-parameters-prod.yaml`, while `ecs-infrastructure` sets `RootStack.State` in the environment parameters. The reusable `deployment-guard` workflow reads both values and returns `deployment-enabled=true` only when both are `enabled`.
+
+This allows a service owner to pause one application and allows the platform team to pause an entire environment or root stack. The guard is evaluated before deployment-related jobs, so the behavior is standardized without duplicating switch logic in every application workflow.
+
+### 25. Prometheus and Grafana as optional ECS services
+
+Observability is implemented as an optional nested CloudFormation stack in each environment root stack. It deploys Prometheus and Grafana as private Fargate services with Service Connect discovery, CloudWatch logs, security groups, health checks, and deployment circuit breakers.
+
+Prometheus discovers ECS workloads and scrapes their `/metrics` endpoints. Grafana is provisioned with Prometheus as its data source and serves dashboards under the environment’s `/grafana/` path. Prometheus is available under `/prometheus/` for testing when `AllowPublicAccess` is enabled.
+
+Public ALB access is explicitly marked as testing-only in the infrastructure parameters. The default design keeps both services private, while the feature flag permits controlled demonstration access without changing the observability stack itself.
